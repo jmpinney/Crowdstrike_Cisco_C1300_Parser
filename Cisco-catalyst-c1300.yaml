@@ -1,147 +1,106 @@
-name: Cisco-catalyst-c1300
-testCases:
-  - event:
-      rawString: |
-        <189>1 2026-08-26T19:21:58Z Test-SW LINK - Up -  gi1/0/12
-    assertions: []
-fieldsToBeRemovedBeforeParsing: []
-$schema: https://schemas.humio.com/parser/v0.3.0
-script: >-
-  // #region PREPARSE
+// #region PREPARSE
+/************************************************************
+****** Parse the C1300 cloud-normalized RFC5424-style header
+****** <pri>1 <ISO8601 ts> <hostname> <facility> - <eventcode> - <message>
+************************************************************/
+case {
+    @rawstring = /^<(?<log.syslog.priority>\d+)>1\s+(?<_ts>\S+)\s+(?<host.name>\S+)\s+(?<facility>\S+)\s+-\s+(?<eventcode>\S+)\s+-\s+(?<message>.+)\n?$/;
+}
+| parseTimestamp(field="_ts", format="yyyy-MM-dd'T'HH:mm:ss'Z'", as="@timestamp")
 
-  /************************************************************
+// #region METADATA
+| Parser.version := "1.0.0"
+| ecs.version := "9.4.0"
+| Cps.version := "1.0.0"
+| Vendor := "cisco"
+| observer.product := "catalyst-1300"
+| event.module := "catalyst"
+| event.kind := "event"
 
-  ****** Parse the C1300 cloud-normalized RFC5424-style header
+// #region NORMALIZATION
+| regex("(?<observer.interface.name>gi[0-9]/[0-9]/[0-9]+)", field=message, strict=false)
+| regex("user (?<user.name>[A-Za-z0-9_-]+)", field=message, strict=false)
+| regex("source (?<source.ip>\d{1,3}(?:\.\d{1,3}){3})", field=message, strict=false)
+| regex("destination (?<destination.ip>\d{1,3}(?:\.\d{1,3}){3})", field=message, strict=false)
+| regex("source URL (?<file.source>\S+)", field=message, strict=false)
+| regex("destination URL (?<file.target>\S+)", field=message, strict=false)
 
-  ****** <pri>1 <ISO8601 ts> <hostname> <facility> - <eventcode> - <message>
+| format(format="catalyst.%s", field=[facility], as="event.dataset")
+| lower(field="event.dataset", as="event.dataset")
+| event.action := lower(eventcode)
 
-  ************************************************************/
+// #region EVENT MAPPING
+| facility match {
+    "LINK" =>
+        array:append(array="event.category[]", values=["network"])
+        | eventcode match {
+            "Up" =>
+                array:append(array="event.type[]", values=["change"])
+                | event.outcome := "success";
+            "Down" =>
+                array:append(array="event.type[]", values=["change"])
+                | event.outcome := "failure";
+            * =>
+                array:append(array="event.type[]", values=["info"])
+                | event.outcome := "unknown";
+        };
 
-  case {
-      @rawstring = /^<(?<log.syslog.priority>\d+)>1\s+(?<_ts>\S+)\s+(?<host.name>\S+)\s+(?<facility>\S+)\s+-\s+(?<eventcode>\S+)\s+-\s+(?<message>.+)\n?$/;
-  }
+    "STP" =>
+        array:append(array="event.category[]", values=["network"])
+        | array:append(array="event.type[]", values=["change"])
+        | event.outcome := "success";
 
-  | parseTimestamp(field="_ts", format="yyyy-MM-dd'T'HH:mm:ss'Z'")
+    "AAA" =>
+        array:append(array="event.category[]", values=["authentication"])
+        | eventcode match {
+            "CONNECT" =>
+                array:append(array="event.type[]", values=["start"])
+                | event.action := "connect"
+                | message match {
+                    /ACCEPTED/ => event.outcome := "success";
+                    * => event.outcome := "unknown";
+                };
+            "DISCONNECT" =>
+                array:append(array="event.type[]", values=["end"])
+                | event.action := "disconnect"
+                | event.outcome := "success";
+            * =>
+                array:append(array="event.type[]", values=["info"])
+                | event.outcome := "unknown";
+        };
 
+    "SYSLOG" =>
+        array:append(array="event.category[]", values=["configuration"])
+        | array:append(array="event.type[]", values=["change"])
+        | event.outcome := "success";
 
-  // #region METADATA
+    "COPY" =>
+        array:append(array="event.category[]", values=["configuration"])
+        | message match {
+            /FILECPY/ =>
+                array:append(array="event.type[]", values=["change"])
+                | event.action := "copy-file"
+                | event.outcome := "unknown";
+            /TRAP/ =>
+                array:append(array="event.type[]", values=["info"])
+                | event.action := "copy-complete"
+                | message match {
+                    /successfully/ => event.outcome := "success";
+                    * => event.outcome := "unknown";
+                };
+            * =>
+                array:append(array="event.type[]", values=["info"])
+                | event.outcome := "unknown";
+        };
 
-  | Parser.version := "1.0.0"
+    * =>
+        array:append(array="event.category[]", values=["network"])
+        | array:append(array="event.type[]", values=["info"])
+        | event.outcome := "unknown";
+}
 
-  | ecs.version := "9.4.0"
+| array:dedup("event.category[]")
+| array:dedup("event.type[]")
 
-  | Cps.version := "1.0.0"
-
-  | Vendor := "cisco"
-
-  | observer.product := "catalyst-1300"
-
-  | event.module := "catalyst"
-
-  | event.kind := "event"
-
-
-  // #region NORMALIZATION
-
-  | regex("(?<observer.interface.name>gi[0-9]/[0-9]/[0-9]+)", field=message,
-  strict=false)
-
-  | regex("user (?<user.name>[A-Za-z0-9_-]+)", field=message, strict=false)
-
-  | regex("source (?<source.ip>\d{1,3}(?:\.\d{1,3}){3})", field=message,
-  strict=false)
-
-  | regex("destination (?<destination.ip>\d{1,3}(?:\.\d{1,3}){3})",
-  field=message, strict=false)
-
-  | regex("source URL (?<file.source>\S+)", field=message, strict=false)
-
-  | regex("destination URL (?<file.target>\S+)", field=message, strict=false)
-
-
-  | format(format="catalyst.%s", field=[facility], as="event.dataset")
-
-  | lower(field="event.dataset", as="event.dataset")
-
-  | event.action := lower(eventcode)
-
-
-  // #region EVENT MAPPING
-
-  | facility match {
-      "LINK" =>
-      array:append(array="event.category[]", values=["network"])
-      | eventcode match {
-          "Up" =>
-              array:append(array="event.type[]", values=["change"])
-              | event.outcome := "success";
-          "Down" =>
-              array:append(array="event.type[]", values=["change"])
-              | event.outcome := "failure";
-          * => *;
-      };
-
-      "STP" =>
-          array:append(array="event.category[]", values=["network"])
-          | array:append(array="event.type[]", values=["change"])
-          | event.outcome := "success";
-
-      "AAA" =>
-          array:append(array="event.category[]", values=["authentication"])
-          | message match {
-              /CONNECT/ =>
-                  array:append(array="event.type[]", values=["start"])
-                  | event.action := "connect"
-                  | message match {
-                      /ACCEPTED/ => event.outcome := "success";
-                      * => event.outcome := "unknown";
-                  };
-              /DISCONNECT/ =>
-                  array:append(array="event.type[]", values=["end"])
-                  | event.action := "disconnect"
-                  | event.outcome := "success";
-              * => *;
-          };
-
-      "SYSLOG" =>
-          array:append(array="event.category[]", values=["configuration"])
-          | array:append(array="event.type[]", values=["change"])
-          | event.outcome := "success";
-
-      "COPY" =>
-          array:append(array="event.category[]", values=["configuration"])
-          | message match {
-              /FILECPY/ =>
-                  array:append(array="event.type[]", values=["change"])
-                  | event.action := "copy-file";
-              /TRAP/ =>
-                  array:append(array="event.type[]", values=["info"])
-                  | event.action := "copy-complete"
-                  | message match {
-                      /successfully/ => event.outcome := "success";
-                      * => event.outcome := "unknown";
-                  };
-              * => *;
-          };
-
-      * => *;
-  }
-
-
-  | array:dedup("event.category[]")
-
-  | array:dedup("event.type[]")
-
-
-  // #region POST-NORMALIZATION
-
-  | drop([_ts])
-tagFields:
-  - Cps.version
-  - Vendor
-  - ecs.version
-  - event.dataset
-  - event.kind
-  - event.module
-  - event.outcome
-  - observer.type
+// #region POST-NORMALIZATION
+| drop([_ts])
