@@ -1,106 +1,209 @@
-// #region PREPARSE
-/************************************************************
-****** Parse the C1300 cloud-normalized RFC5424-style header
-****** <pri>1 <ISO8601 ts> <hostname> <facility> - <eventcode> - <message>
-************************************************************/
-case {
-    @rawstring = /^<(?<log.syslog.priority>\d+)>1\s+(?<_ts>\S+)\s+(?<host.name>\S+)\s+(?<facility>\S+)\s+-\s+(?<eventcode>\S+)\s+-\s+(?<message>.+)\n?$/;
-}
-| parseTimestamp(field="_ts", format="yyyy-MM-dd'T'HH:mm:ss'Z'", as="@timestamp")
+name: Cisco-catalyst-c1300
+testCases:
+  - event:
+      rawString: >
+        <188>1 2026-08-27T15:22:45Z Test-SW AAA - REJECT - New https connection
+        for user testadmin, source 192.168.9.240 destination 10.75.17.113 
+        REJECTED
+    assertions: []
+  - event:
+      rawString: >
+        <188>1 2026-08-27T16:17:28Z Test-SW BRG_FWD - PORT_LOCK - Port Lock
+        action on Mac Table has started
+    assertions: []
+  - event:
+      rawString: >
+        <188>1 2026-08-27T16:17:28Z Test-SW BRG_FWD - PORT_LOCK - Port Lock
+        action on Mac Table has ended
+    assertions: []
+  - event:
+      rawString: >-
+        <188>1 2026-08-27T16:26:31Z Test-SW 2SWPORT - LOCKPORTACTIVE - A packet
+        with source MAC 00:00:00:00:00:00 tried to access through port gi3/0/37
+        which is locked
+    assertions: []
+  - event:
+      rawString: >-
+        <188>1 2026-08-27T15:22:45Z Test-SW AAA - REJECT - New https connection
+        for user techadmin, source 192.168.9.240 destination 10.75.17.113 
+        REJECTED
+    assertions: []
+  - event:
+      rawString: |
+        <189>1 2026-08-26T19:21:58Z CR-Test-SW LINK - Up -  gi1/0/12
+    assertions: []
+fieldsToBeRemovedBeforeParsing: []
+$schema: https://schemas.humio.com/parser/v0.3.0
+script: |2
+    // #region PREPARSE
 
-// #region METADATA
-| Parser.version := "1.0.0"
-| ecs.version := "9.4.0"
-| Cps.version := "1.0.0"
-| Vendor := "cisco"
-| observer.product := "catalyst-1300"
-| event.module := "catalyst"
-| event.kind := "event"
+    /************************************************************
 
-// #region NORMALIZATION
-| regex("(?<observer.interface.name>gi[0-9]/[0-9]/[0-9]+)", field=message, strict=false)
-| regex("user (?<user.name>[A-Za-z0-9_-]+)", field=message, strict=false)
-| regex("source (?<source.ip>\d{1,3}(?:\.\d{1,3}){3})", field=message, strict=false)
-| regex("destination (?<destination.ip>\d{1,3}(?:\.\d{1,3}){3})", field=message, strict=false)
-| regex("source URL (?<file.source>\S+)", field=message, strict=false)
-| regex("destination URL (?<file.target>\S+)", field=message, strict=false)
+    ****** Parse the C1300 cloud-normalized RFC5424-style header
 
-| format(format="catalyst.%s", field=[facility], as="event.dataset")
-| lower(field="event.dataset", as="event.dataset")
-| event.action := lower(eventcode)
+    ****** <pri>1 <ISO8601 ts> <hostname> <facility> - <eventcode> - <message>
 
-// #region EVENT MAPPING
-| facility match {
-    "LINK" =>
-        array:append(array="event.category[]", values=["network"])
-        | eventcode match {
-            "Up" =>
-                array:append(array="event.type[]", values=["change"])
-                | event.outcome := "success";
-            "Down" =>
-                array:append(array="event.type[]", values=["change"])
-                | event.outcome := "failure";
-            * =>
-                array:append(array="event.type[]", values=["info"])
-                | event.outcome := "unknown";
-        };
+    ************************************************************/
+    case {
+        @rawstring = /^<(?<log.syslog.priority>\d+)>1\s+(?<_ts>\S+)\s+(?<host.name>\S+)\s+(?<facility>\S+)\s+-\s+(?<eventcode>\S+)\s+-\s+(?<message>.+)\n?$/;
+    }
+    | parseTimestamp(field="_ts", format="yyyy-MM-dd'T'HH:mm:ss'Z'", as="@timestamp")
 
-    "STP" =>
-        array:append(array="event.category[]", values=["network"])
-        | array:append(array="event.type[]", values=["change"])
-        | event.outcome := "success";
+    // #region METADATA
+    | Parser.version := "1.0.0"
+    | ecs.version := "9.4.0"
+    | Cps.version := "1.0.0"
+    | Vendor := "cisco"
+    | observer.product := "catalyst-1300"
+    | observer.type := "switch"
+    | event.module := "catalyst"
+    | event.kind := "event"
 
-    "AAA" =>
-        array:append(array="event.category[]", values=["authentication"])
-        | eventcode match {
-            "CONNECT" =>
-                array:append(array="event.type[]", values=["start"])
-                | event.action := "connect"
-                | message match {
-                    /ACCEPTED/ => event.outcome := "success";
-                    * => event.outcome := "unknown";
-                };
-            "DISCONNECT" =>
-                array:append(array="event.type[]", values=["end"])
-                | event.action := "disconnect"
-                | event.outcome := "success";
-            * =>
-                array:append(array="event.type[]", values=["info"])
-                | event.outcome := "unknown";
-        };
+    // #region NORMALIZATION
+    | regex("(?<observer.interface.name>gi[0-9]/[0-9]/[0-9]+)", field=message, strict=false)
+    | regex("user (?<user.name>[A-Za-z0-9_-]+)", field=message, strict=false)
+    | regex("Username (?<user.name>[A-Za-z0-9_-]+)", field=message, strict=false)
+    | regex("source (?<source.ip>\d{1,3}(?:\.\d{1,3}){3})", field=message, strict=false)
+    | regex("destination (?<destination.ip>\d{1,3}(?:\.\d{1,3}){3})", field=message, strict=false)
+    | regex("source URL (?<file.source>\S+)", field=message, strict=false)
+    | regex("destination URL (?<file.target>\S+)", field=message, strict=false)
+    | regex("source MAC (?<source.mac>[0-9a-fA-F:]{17})", field=message, strict=false)
 
-    "SYSLOG" =>
-        array:append(array="event.category[]", values=["configuration"])
-        | array:append(array="event.type[]", values=["change"])
-        | event.outcome := "success";
+    | format(format="catalyst.%s", field=[facility], as="event.dataset")
+    | lower(field="event.dataset", as="event.dataset")
+    | event.action := lower(eventcode)
 
-    "COPY" =>
-        array:append(array="event.category[]", values=["configuration"])
-        | message match {
-            /FILECPY/ =>
-                array:append(array="event.type[]", values=["change"])
-                | event.action := "copy-file"
-                | event.outcome := "unknown";
-            /TRAP/ =>
-                array:append(array="event.type[]", values=["info"])
-                | event.action := "copy-complete"
-                | message match {
-                    /successfully/ => event.outcome := "success";
-                    * => event.outcome := "unknown";
-                };
-            * =>
-                array:append(array="event.type[]", values=["info"])
-                | event.outcome := "unknown";
-        };
+    // #region EVENT MAPPING
+    | facility match {
+        "LINK" =>
+            array:append(array="event.category[]", values=["network"])
+            | eventcode match {
+                "Up" =>
+                    array:append(array="event.type[]", values=["change"])
+                    | event.outcome := "success";
+                "Down" =>
+                    array:append(array="event.type[]", values=["change"])
+                    | event.outcome := "failure";
+                * =>
+                    array:append(array="event.type[]", values=["info"])
+                    | event.outcome := "unknown";
+            };
 
-    * =>
-        array:append(array="event.category[]", values=["network"])
-        | array:append(array="event.type[]", values=["info"])
-        | event.outcome := "unknown";
-}
+        "STP" =>
+            array:append(array="event.category[]", values=["network"])
+            | array:append(array="event.type[]", values=["change"])
+            | event.outcome := "success";
 
-| array:dedup("event.category[]")
-| array:dedup("event.type[]")
+        "AAA" =>
+            eventcode match {
+                "CONNECT" =>
+                    array:append(array="event.category[]", values=["authentication"])
+                    | array:append(array="event.type[]", values=["start"])
+                    | event.action := "connect"
+                    | message match {
+                        /ACCEPTED/ => event.outcome := "success";
+                        * => event.outcome := "unknown";
+                    };
+                "DISCONNECT" =>
+                    array:append(array="event.category[]", values=["authentication"])
+                    | array:append(array="event.type[]", values=["end"])
+                    | event.action := "disconnect"
+                    | event.outcome := "success";
+                "REJECT" =>
+                    array:append(array="event.category[]", values=["authentication"])
+                    | array:append(array="event.type[]", values=["start"])
+                    | event.action := "reject"
+                    | event.outcome := "failure";
+                "LCLUSRSUCC" =>
+                    array:append(array="event.category[]", values=["iam"])
+                    | array:append(array="event.type[]", values=["creation"])
+                    | event.action := "user-create"
+                    | event.outcome := "success";
+                "LCLPWDCHNGE" =>
+                    array:append(array="event.category[]", values=["iam"])
+                    | array:append(array="event.type[]", values=["change"])
+                    | event.action := "password-change"
+                    | event.outcome := "success";
+                "LCLUSRDELETE" =>
+                    array:append(array="event.category[]", values=["iam"])
+                    | array:append(array="event.type[]", values=["deletion"])
+                    | event.action := "user-delete"
+                    | event.outcome := "success";
+                * =>
+                    array:append(array="event.category[]", values=["authentication"])
+                    | array:append(array="event.type[]", values=["info"])
+                    | event.outcome := "unknown";
+            };
 
-// #region POST-NORMALIZATION
-| drop([_ts])
+        "SYSLOG" =>
+            array:append(array="event.category[]", values=["configuration"])
+            | array:append(array="event.type[]", values=["change"])
+            | event.outcome := "success";
+
+        "COPY" =>
+            array:append(array="event.category[]", values=["configuration"])
+            | message match {
+                /FILECPY/ =>
+                    array:append(array="event.type[]", values=["change"])
+                    | event.action := "copy-file"
+                    | event.outcome := "unknown";
+                /TRAP/ =>
+                    array:append(array="event.type[]", values=["info"])
+                    | event.action := "copy-complete"
+                    | message match {
+                        /successfully/ => event.outcome := "success";
+                        * => event.outcome := "unknown";
+                    };
+                * =>
+                    array:append(array="event.type[]", values=["info"])
+                    | event.outcome := "unknown";
+            };
+
+        "BRG_FWD" =>
+            array:append(array="event.category[]", values=["network"])
+            | message match {
+                /has started/ =>
+                    array:append(array="event.type[]", values=["start"])
+                    | event.action := "port-lock-start"
+                    | event.outcome := "success";
+                /has ended/ =>
+                    array:append(array="event.type[]", values=["end"])
+                    | event.action := "port-lock-end"
+                    | event.outcome := "success";
+                * =>
+                    array:append(array="event.type[]", values=["info"])
+                    | event.outcome := "unknown";
+            };
+
+        "2SWPORT" =>
+            array:append(array="event.category[]", values=["network"])
+            | eventcode match {
+                "LOCKPORTACTIVE" =>
+                    array:append(array="event.type[]", values=["denied"])
+                    | event.action := "port-security-violation"
+                    | event.outcome := "failure";
+                * =>
+                    array:append(array="event.type[]", values=["info"])
+                    | event.outcome := "unknown";
+            };
+
+        * =>
+            array:append(array="event.category[]", values=["network"])
+            | array:append(array="event.type[]", values=["info"])
+            | event.outcome := "unknown";
+    }
+
+    | array:dedup("event.category[]")
+    | array:dedup("event.type[]")
+
+    // #region POST-NORMALIZATION
+    | drop([_ts])
+tagFields:
+  - Cps.version
+  - Vendor
+  - ecs.version
+  - event.dataset
+  - event.kind
+  - event.module
+  - event.outcome
+  - observer.type
